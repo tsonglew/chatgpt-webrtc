@@ -1,6 +1,6 @@
 class Lottery:
-    def __init__(self, participants):
-        self.participants = participants
+    def __init__(self, participants=[]):
+        self.participants.add({})
 
     def draw_winner(self):
         if not self.participants:
