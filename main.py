@@ -1,60 +1,120 @@
-# 生成一个抽奖页面的后端服务，这些功能：
-# - 首页，返回 index.html
-# - 录入用户的接口 /add_user，用户在页面上填写用户信息，点击提交后，将使用 json 格式把用户的信息提交到这个接口，将用户信息保存到 users_list 列表中。需要录入的信息包括用户的名字和手机号，收到请求后检查手机号是否时中国的，如果不是，返回错误信息，如果是，将用户信息保存到列表中，返回成功的 JSON 信息。
-# - 抽奖的接口 /draw_winner，从列表中随机抽取一个用户，返回抽取到的用户的信息。
-# - 抽奖页面的路由，兼容包含 .html 后缀和不包含后缀两种请求方式，返回 lottery.html
-# - 录入用户信息的路由，兼容包含 .html 后缀和不包含后缀两种请求方式，返回 user_info.html
-# - 查询所有已经录入的用户信息的路由，兼容包含 .html 后缀和不包含后缀两种请求方式，返回 show_users.html
-# - 开启服务热更新，监听 8888 端口，不限制访问的 ip
+# [1] prompt: 使用 aiohttp + aiortc 生成一个 webrtc 服务后端，当客户端连上服务端后，获取服务端本地的视频流，与客户端建立连接，
+# 有这几个路由：
+# - / ，返回 index.html 文件
+# - /client.js，返回 client.js 文件
+# - /offer，处理信令相关逻辑
+
+from aiohttp import web
+import asyncio
+import aiortc
+from aiortc.contrib.media import MediaPlayer, MediaRelay
+
+# [5] Prompt: 修复所有缺失的 import 
+import platform
+from aiortc import RTCPeerConnection, RTCSessionDescription
+import json
+
+pcs = set()
+
+relay = None
+webcam = None
 
 
-from flask import Flask, request, jsonify, render_template
-import random
+async def index(request):
+    content = open('index.html', 'r').read()
+    return web.Response(content_type='text/html', text=content)
 
-app = Flask(__name__)
+async def client_js(request):
+    content = open('client.js', 'r').read()
+    return web.Response(content_type='application/javascript', text=content)
 
-users_list = []
+async def offer(request):
+    params = await request.json()
+    offer = RTCSessionDescription(sdp=params['sdp'], type=params['type'])
+    print('========= offer ===========')
+    print(offer)
+    
+    pc = RTCPeerConnection()
+    pcs.add(pc)
 
-@app.route('/')
-def index():
-    return render_template('index.html')
+    @pc.on("connectionstatechange")
+    async def on_connectionstatechange():
+        print("Connection state is %s" % pc.connectionState)
+        if pc.connectionState == "failed":
+            await pc.close()
+            pcs.discard(pc)
 
-@app.route('/add_user', methods=['POST'])
-def add_user():
-    name = request.json.get('name')
-    phone = request.json.get('phone')
-    if not phone.startswith('86'):
-        return jsonify({'error': 'Invalid phone number'})
-    users_list.append({'name': name, 'phone': phone})
-    return jsonify({'success': True})
+    # -- [4][2] 手动添加
+    video = await get_local_video_track()
+    pc.addTrack(video)
+    
+    # --- [2] prompt: 用 python 3.8 的语法优化一下
+    # answer = yield from pc.createAnswer()
+    # await pc.setLocalDescription(answer)
+    await pc.setRemoteDescription(offer)
+    answer = await pc.createAnswer()
+    print(answer)
+    await pc.setLocalDescription(answer)
+    
+    # -- [3] prompt: 将本地 PeerConnection 的 sdp 返回给客户端，格式为 json，包含 sdp 和 type 两个字段
+    # return web.Response(content_type='application/json', text=json.dumps({'result': 'ok'}))
+    response = {'sdp': pc.localDescription.sdp, 'type': pc.localDescription.type}
+    print(f"Response: {response}")
+    return web.Response(content_type='application/json', text=json.dumps(response))
 
-@app.route('/draw_winner')
-def draw_winner():
-    if not users:
-        return jsonify({'error': 'No users found'})
-    winner = random.choice(users_list)
-    return jsonify(winner)
-
-@app.route('/lottery')
-@app.route('/lottery.html')
-def lottery():
-    return render_template('lottery.html')
-
-@app.route('/user_info')
-@app.route('/user_info.html')
-def user_info():
-    return render_template('user_info.html')
-
-@app.route('/show_users')
-@app.route('/show_users.html')
-def show_users():
-    return render_template('show_users.html', users=users_list)
-
-
-@app.route('/users')
-def users():
-    return jsonify(users_list)
+async def on_shutdown(app):
+    for pc in pcs:
+        await pc.close()
 
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8888, debug=True)
+# -- [4][1] prompt: 写一个 mac 获取本地视频流的方法，从本地的摄像头上获取640*480分辨率、30fps 的视频轨道
+async def get_local_video_track():
+    # -- [6] 手动修改 video = MediaPlayer('/dev/video0', format='v4l2', options={'video_size': '640x480', 'framerate': '30'})
+    global relay, webcam
+    options = {"framerate": "30", "video_size": "640x480"}
+    if relay is None:
+        if platform.system() == "Darwin":
+            webcam = MediaPlayer(
+                "default:none", format="avfoundation", options=options
+            )
+        elif platform.system() == "Windows":
+            webcam = MediaPlayer(
+                "video=Integrated Camera", format="dshow", options=options
+            )
+        else:
+            webcam = MediaPlayer("/dev/video0", format="v4l2", options=options)
+        relay = MediaRelay()
+    return relay.subscribe(webcam.video)
+
+
+app = web.Application()
+app.on_shutdown.append(on_shutdown)
+app.router.add_get('/', index)
+app.router.add_get('/client.js', client_js)
+app.router.add_post('/offer', offer)
+
+
+# -- [7] by ChatGPT Prompt: 增加一个可以获取二维码的路由，就叫 /qrcode 吧。客户端访问这个路由时会在服务端生成一个二维码的图片，并以 png 的格式返回给客户端,
+import qrcode
+import io
+async def qr_code(request):
+    # 获取根路径dict
+    root_path = request.url.with_path('/').human_repr()
+    print(root_path)
+    # 创建一个二维码对象并设置内容为根路径
+    qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=10, border=4)
+    qr.add_data(root_path)
+    qr.make(fit=True)
+    # 将二维码转换成图片
+    img = qr.make_image(fill_color="black", back_color="white")
+    # 将图片保存到内存中
+    img_byte_arr = io.BytesIO()
+    img.save(img_byte_arr, format='PNG')
+    img_byte_arr = img_byte_arr.getvalue()
+    # 返回图片
+    return web.Response(body=img_byte_arr, content_type='image/png', headers={'Location': root_path})
+
+  
+app.router.add_get('/qrcode', qr_code)
+
+web.run_app(app)

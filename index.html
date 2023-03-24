@@ -1,0 +1,21 @@
+<!-- [1] Prompt: 生成一个页面，左上角有一个“开始”按钮，背景颜色为蓝色，字体为黑色。下面有一个视频标签，大小为 640*480 -->
+<!DOCTYPE html>
+<html>
+<head>
+	<title>WebRTC Chat with GPT-3</title>
+	<style>
+		body {
+			background-color: blue;
+			color: black;
+		}
+	</style>
+</head>
+<body>
+	<button id="startButton">开始</button>
+    <!-- [2] Prompt：有视频时立即播放，播放视频时不要全屏 -->
+				<!-- <video id="localVideo" width="640" height="480"></video> -->
+				<video id="localVideo" width="640" height="480" autoplay playsinline></video>
+
+<script src="client.js"></script>
+</body>
+</html>
